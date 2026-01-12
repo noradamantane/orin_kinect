@@ -375,6 +375,17 @@ if [ -d "$SDK_DIR" ]; then
         FAILED_TESTS+=("build-dir-access")
     }
 
+    # Patch azure_c_shared to remove -Werror flag that overrides our warning suppressions
+    print_info "Patching azure_c_shared CMakeLists.txt to remove -Werror..."
+    AZURE_CMAKE="../extern/azure_c_shared/src/CMakeLists.txt"
+    if [ -f "$AZURE_CMAKE" ]; then
+        # Remove all instances of -Werror from the CMakeLists.txt
+        sed -i 's/-Werror//g' "$AZURE_CMAKE"
+        print_success "Removed -Werror flags from azure_c_shared"
+    else
+        print_warning "Could not find azure_c_shared CMakeLists.txt to patch"
+    fi
+
     # Configure with CMake
     # Add flags to disable problematic warnings on newer GCC (Ubuntu 22.04+) and OpenSSL 3.0
     print_info "Configuring build with CMake..."
@@ -539,7 +550,56 @@ else
         suggest_solution "sdk-clone"
     fi
 
-    echo -e "\n${YELLOW}Despite these warnings, the SDK library should still be functional.${NC}"
+    # Provide specific functionality status based on what failed
+    echo -e "\n${BLUE}Functionality Status:${NC}"
+    echo ""
+
+    # Check libk4a packages
+    if [[ " ${FAILED_TESTS[@]} " =~ "libk4a" ]]; then
+        print_error "✗ Azure Kinect SDK library (libk4a): NOT FUNCTIONAL"
+        echo "  - Cannot use Azure Kinect in applications"
+        echo "  - Cannot develop with the SDK"
+    else
+        print_success "✓ Azure Kinect SDK library (libk4a): FUNCTIONAL"
+        echo "  - Can use libk4a in your own applications"
+        echo "  - Can link against the SDK in C/C++ projects"
+    fi
+    echo ""
+
+    # Check k4aviewer build
+    if [[ " ${FAILED_TESTS[@]} " =~ "ninja-build" ]] || [[ " ${FAILED_TESTS[@]} " =~ "cmake-configure" ]] || [[ " ${FAILED_TESTS[@]} " =~ "k4aviewer-build" ]]; then
+        print_error "✗ k4aviewer and SDK tools: NOT AVAILABLE"
+        echo "  - Cannot use k4aviewer to test the camera"
+        echo "  - Cannot use k4arecorder or other command-line tools"
+        echo "  - Can still use the libk4a library in custom applications"
+    else
+        print_success "✓ k4aviewer and SDK tools: AVAILABLE"
+        echo "  - Can test camera with: k4aviewer"
+        echo "  - Can record data with built tools"
+    fi
+    echo ""
+
+    # Check depth engine
+    if [[ " ${FAILED_TESTS[@]} " =~ "depthengine" ]]; then
+        print_warning "⚠ Depth processing: MAY NOT WORK"
+        echo "  - RGB camera will work"
+        echo "  - Depth camera requires libdepthengine.so.2.0"
+        echo "  - IMU (accelerometer/gyroscope) will work"
+    else
+        print_success "✓ Depth processing: FUNCTIONAL"
+        echo "  - Full depth camera support available"
+    fi
+    echo ""
+
+    # Check udev rules
+    if [[ " ${FAILED_TESTS[@]} " =~ "udev" ]]; then
+        print_warning "⚠ Device permissions: MAY REQUIRE SUDO"
+        echo "  - May need to run applications with sudo"
+        echo "  - Or manually install udev rules for non-root access"
+    else
+        print_success "✓ Device permissions: CONFIGURED"
+        echo "  - Can access Kinect without sudo"
+    fi
 fi
 
 echo -e "\n${BLUE}Installation log completed at $(date)${NC}"
