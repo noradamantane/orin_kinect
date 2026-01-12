@@ -247,58 +247,53 @@ else
     exit 1
 fi
 
-# Step 6: Add Microsoft package repository
-print_step "Adding Microsoft package repository for ARM64"
-print_info "Configuring Microsoft apt repository..."
+# Step 6: Download and install Azure Kinect SDK packages
+print_step "Downloading Azure Kinect SDK packages for ARM64"
+print_info "Microsoft only provides packages for Ubuntu 18.04, but they work on newer versions..."
 
 # Install prerequisites
-if ! $SUDO apt-get install -y curl gpg; then
-    print_error "Failed to install curl and gpg"
+if ! $SUDO apt-get install -y wget; then
+    print_error "Failed to install wget"
     suggest_solution "microsoft-repo"
     exit 1
 fi
 
-# Get Ubuntu version
-UBUNTU_VERSION=$(lsb_release -rs)
-print_info "Detected Ubuntu version: $UBUNTU_VERSION"
+# Create temporary directory for downloads
+TEMP_DIR=$(mktemp -d)
+print_info "Using temporary directory: $TEMP_DIR"
 
-# Check if repository already exists
-REPO_CONFIGURED=false
-if [ -f "/etc/apt/sources.list.d/microsoft-prod.list" ]; then
-    print_success "Microsoft repository already configured"
-    REPO_CONFIGURED=true
+# Package URLs from Microsoft Ubuntu 18.04 repository
+K4A_VERSION="1.4.2"
+BASE_URL="https://packages.microsoft.com/ubuntu/18.04"
+LIBK4A_URL="${BASE_URL}/multiarch/prod/pool/main/libk/libk4a1.4/libk4a1.4_${K4A_VERSION}_arm64.deb"
+LIBK4A_DEV_URL="${BASE_URL}/multiarch/prod/pool/main/libk/libk4a1.4-dev/libk4a1.4-dev_${K4A_VERSION}_arm64.deb"
+
+print_info "Downloading libk4a1.4 v${K4A_VERSION}..."
+if wget -q -O "${TEMP_DIR}/libk4a1.4.deb" "$LIBK4A_URL"; then
+    print_success "Downloaded libk4a1.4"
 else
-    # Add Microsoft GPG key
-    print_info "Adding Microsoft GPG key..."
-    if curl -sSL https://packages.microsoft.com/keys/microsoft.asc | $SUDO gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg; then
-        print_success "Microsoft GPG key added"
-    else
-        print_error "Failed to add Microsoft GPG key"
-        suggest_solution "microsoft-repo"
-        exit 1
-    fi
-
-    # Add Microsoft repository for ARM64 with allow-insecure option
-    # The Microsoft repo doesn't have a Release file, so we need to bypass the check
-    print_info "Adding Microsoft ARM64 repository (with allow-insecure for missing Release file)..."
-    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg allow-insecure=yes] https://packages.microsoft.com/ubuntu/${UBUNTU_VERSION}/multiarch/prod ${UBUNTU_VERSION} main" | $SUDO tee /etc/apt/sources.list.d/microsoft-prod.list > /dev/null
-    print_success "Microsoft repository added"
+    print_error "Failed to download libk4a1.4"
+    suggest_solution "k4a-packages"
+    rm -rf "$TEMP_DIR"
+    exit 1
 fi
 
-# Always update package lists after repository configuration
-print_info "Updating package lists with Microsoft repository..."
-if $SUDO apt-get update; then
-    print_success "Package lists updated"
+print_info "Downloading libk4a1.4-dev v${K4A_VERSION}..."
+if wget -q -O "${TEMP_DIR}/libk4a1.4-dev.deb" "$LIBK4A_DEV_URL"; then
+    print_success "Downloaded libk4a1.4-dev"
 else
-    print_warning "Update completed with warnings (this may be normal for Microsoft repo)"
+    print_error "Failed to download libk4a1.4-dev"
+    suggest_solution "k4a-packages"
+    rm -rf "$TEMP_DIR"
+    exit 1
 fi
 
 # Step 7: Install Azure Kinect SDK packages
 print_step "Installing Azure Kinect SDK packages"
-print_info "Installing libk4a runtime, development files, and tools..."
+print_info "Installing downloaded .deb packages..."
 
-K4A_PACKAGES="libk4a1.4 libk4a1.4-dev k4a-tools"
-if $SUDO apt-get install -y --allow-unauthenticated $K4A_PACKAGES; then
+# Install the packages
+if $SUDO apt-get install -y "${TEMP_DIR}/libk4a1.4.deb" "${TEMP_DIR}/libk4a1.4-dev.deb"; then
     print_success "Azure Kinect packages installed"
 
     # Test installation
@@ -310,26 +305,117 @@ if $SUDO apt-get install -y --allow-unauthenticated $K4A_PACKAGES; then
         FAILED_TESTS+=("libk4a-runtime")
     fi
 
-    if test_package "k4a-tools"; then
-        print_success "  k4a-tools package installed"
+    if test_package "libk4a1.4-dev"; then
+        print_success "  libk4a1.4-dev package installed"
     else
-        print_warning "  k4a-tools package not confirmed"
-        FAILED_TESTS+=("k4a-tools")
-    fi
-
-    if test_command "k4aviewer"; then
-        print_success "  k4aviewer command available"
-    else
-        print_warning "  k4aviewer command not found in PATH"
-        FAILED_TESTS+=("k4aviewer-command")
+        print_warning "  libk4a1.4-dev package not confirmed"
+        FAILED_TESTS+=("libk4a-dev")
     fi
 else
     print_error "Failed to install Azure Kinect packages"
     suggest_solution "k4a-packages"
+    rm -rf "$TEMP_DIR"
     exit 1
 fi
 
-# Step 8: Verify depth engine library
+# Clean up temporary directory
+rm -rf "$TEMP_DIR"
+print_info "Cleaned up temporary files"
+
+# Step 8: Build k4a-tools from source (ARM64 not available as packages)
+print_step "Building k4a-tools (k4aviewer) from source"
+print_info "Microsoft doesn't provide ARM64 binaries for k4a-tools, building from source..."
+
+# Install additional build dependencies for k4a-tools
+BUILD_DEPS="git cmake pkg-config libusb-1.0-0-dev"
+if $SUDO apt-get install -y $BUILD_DEPS; then
+    print_success "Build dependencies installed"
+else
+    print_error "Failed to install build dependencies"
+    suggest_solution "sdk-build"
+    FAILED_TESTS+=("build-deps")
+fi
+
+# Clone SDK repository if not already present
+SDK_DIR="Azure-Kinect-Sensor-SDK"
+if [ ! -d "$SDK_DIR" ]; then
+    print_info "Cloning Azure Kinect SDK repository..."
+    if git clone --depth 1 https://github.com/microsoft/Azure-Kinect-Sensor-SDK.git; then
+        print_success "SDK repository cloned"
+    else
+        print_error "Failed to clone SDK repository"
+        suggest_solution "sdk-clone"
+        FAILED_TESTS+=("sdk-clone")
+    fi
+else
+    print_success "SDK repository already exists"
+fi
+
+# Build the SDK
+if [ -d "$SDK_DIR" ]; then
+    print_info "Building Azure Kinect SDK and tools..."
+    cd "$SDK_DIR"
+
+    # Create build directory
+    if [ ! -d "build" ]; then
+        mkdir build
+    fi
+
+    cd build
+
+    # Configure with CMake
+    print_info "Configuring build with CMake..."
+    if cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release; then
+        print_success "CMake configuration complete"
+    else
+        print_error "CMake configuration failed"
+        suggest_solution "sdk-build"
+        cd ../..
+        FAILED_TESTS+=("cmake-configure")
+    fi
+
+    # Build with Ninja
+    if [[ ! " ${FAILED_TESTS[@]} " =~ "cmake-configure" ]]; then
+        print_info "Building SDK (this may take several minutes)..."
+        if ninja; then
+            print_success "SDK build complete"
+
+            # Test if k4aviewer was built
+            if [ -f "bin/k4aviewer" ]; then
+                print_success "k4aviewer built successfully"
+                print_info "  Location: $PWD/bin/k4aviewer"
+
+                # Optionally install the tools
+                print_info "Installing k4aviewer to /usr/local/bin..."
+                if $SUDO cp bin/k4aviewer /usr/local/bin/; then
+                    print_success "k4aviewer installed to /usr/local/bin"
+                else
+                    print_warning "Failed to install k4aviewer, but it's available in build/bin/"
+                fi
+            else
+                print_warning "k4aviewer not found after build"
+                FAILED_TESTS+=("k4aviewer-build")
+            fi
+
+            # Clean up build artifacts to save space
+            print_info "Cleaning up build artifacts to save space..."
+            ninja clean
+            print_success "Build artifacts cleaned"
+        else
+            print_error "SDK build failed"
+            suggest_solution "sdk-build"
+            cd ../..
+            FAILED_TESTS+=("ninja-build")
+        fi
+    fi
+
+    cd ../..
+else
+    print_warning "SDK repository not available, skipping build"
+    FAILED_TESTS+=("sdk-missing")
+fi
+
+# Step 9: Verify depth engine library
 print_step "Verifying depth engine library"
 print_info "The depth engine library should be included in the libk4a package..."
 
@@ -360,26 +446,10 @@ print_info "Updating library cache..."
 $SUDO ldconfig
 print_success "Library cache updated"
 
-# Step 9: Clone Azure Kinect SDK source (for samples and additional tools)
-print_step "Cloning Azure Kinect SDK source repository"
-SDK_DIR="Azure-Kinect-Sensor-SDK"
-
-if [ -d "$SDK_DIR" ]; then
-    print_success "SDK repository already exists at $SDK_DIR"
-else
-    print_info "Cloning SDK repository from GitHub..."
-    if git clone --depth 1 https://github.com/microsoft/Azure-Kinect-Sensor-SDK.git; then
-        print_success "SDK repository cloned"
-    else
-        print_error "Failed to clone SDK repository"
-        suggest_solution "sdk-clone"
-        FAILED_TESTS+=("sdk-clone")
-    fi
-fi
-
 # Step 10: Configure udev rules for device access
 print_step "Configuring udev rules for Kinect device access"
 
+SDK_DIR="Azure-Kinect-Sensor-SDK"
 if [ -d "$SDK_DIR" ]; then
     UDEV_SOURCE="$SDK_DIR/scripts/99-k4a.rules"
     if [ -f "$UDEV_SOURCE" ]; then
@@ -442,8 +512,7 @@ else
         suggest_solution "sdk-clone"
     fi
 
-    echo -e "\n${YELLOW}Despite these warnings, the SDK may still be functional.${NC}"
-    echo "Try running: k4aviewer (after connecting your device)"
+    echo -e "\n${YELLOW}Despite these warnings, the SDK library should still be functional.${NC}"
 fi
 
 echo -e "\n${BLUE}Installation log completed at $(date)${NC}"
