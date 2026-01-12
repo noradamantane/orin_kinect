@@ -376,13 +376,15 @@ if [ -d "$SDK_DIR" ]; then
     }
 
     # Configure with CMake
-    # Add flags to disable problematic warnings on newer GCC (Ubuntu 22.04+)
+    # Add flags to disable problematic warnings on newer GCC (Ubuntu 22.04+) and OpenSSL 3.0
     print_info "Configuring build with CMake..."
-    print_info "Applying workaround for GCC 11+ compatibility..."
+    print_info "Applying workarounds for GCC 11+ and OpenSSL 3.0 compatibility..."
 
     # Set compiler flags to disable warnings that are treated as errors
-    export CFLAGS="-Wno-error=array-parameter -Wno-error=maybe-uninitialized"
-    export CXXFLAGS="-Wno-error=array-parameter -Wno-error=maybe-uninitialized"
+    # GCC 11+ compatibility: -Wno-error=array-parameter, -Wno-error=maybe-uninitialized
+    # OpenSSL 3.0 compatibility: -Wno-error=deprecated-declarations, -Wno-error=discarded-qualifiers
+    export CFLAGS="-Wno-error=array-parameter -Wno-error=maybe-uninitialized -Wno-error=deprecated-declarations -Wno-error=discarded-qualifiers"
+    export CXXFLAGS="-Wno-error=array-parameter -Wno-error=maybe-uninitialized -Wno-error=deprecated-declarations -Wno-error=discarded-qualifiers"
 
     if [[ ! " ${FAILED_TESTS[@]} " =~ "build-dir-access" ]] && [[ ! " ${FAILED_TESTS[@]} " =~ "sdk-dir-access" ]]; then
         if cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release; then
