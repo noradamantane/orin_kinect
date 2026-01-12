@@ -398,6 +398,12 @@ if [ -d "$SDK_DIR" ]; then
                 sed -i 's/-Werror//g' "$AZURE_CMAKE"
                 print_success "Removed -Werror flags from azure_c_shared"
 
+                # Clear CMake cache to force clean reconfiguration
+                print_info "Clearing CMake cache to force reconfiguration..."
+                rm -f CMakeCache.txt
+                rm -rf CMakeFiles/
+                print_success "CMake cache cleared"
+
                 # Re-run cmake to pick up the changes
                 print_info "Re-running CMake with patched files..."
                 if cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release; then
