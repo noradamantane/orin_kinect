@@ -375,17 +375,6 @@ if [ -d "$SDK_DIR" ]; then
         FAILED_TESTS+=("build-dir-access")
     }
 
-    # Patch azure_c_shared to remove -Werror flag that overrides our warning suppressions
-    print_info "Patching azure_c_shared CMakeLists.txt to remove -Werror..."
-    AZURE_CMAKE="../extern/azure_c_shared/src/CMakeLists.txt"
-    if [ -f "$AZURE_CMAKE" ]; then
-        # Remove all instances of -Werror from the CMakeLists.txt
-        sed -i 's/-Werror//g' "$AZURE_CMAKE"
-        print_success "Removed -Werror flags from azure_c_shared"
-    else
-        print_warning "Could not find azure_c_shared CMakeLists.txt to patch"
-    fi
-
     # Configure with CMake
     # Add flags to disable problematic warnings on newer GCC (Ubuntu 22.04+) and OpenSSL 3.0
     print_info "Configuring build with CMake..."
@@ -400,6 +389,26 @@ if [ -d "$SDK_DIR" ]; then
     if [[ ! " ${FAILED_TESTS[@]} " =~ "build-dir-access" ]] && [[ ! " ${FAILED_TESTS[@]} " =~ "sdk-dir-access" ]]; then
         if cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release; then
             print_success "CMake configuration complete"
+
+            # Now patch azure_c_shared CMakeLists.txt AFTER cmake has cloned the submodules
+            print_info "Patching azure_c_shared CMakeLists.txt to remove -Werror..."
+            AZURE_CMAKE="../extern/azure_c_shared/src/CMakeLists.txt"
+            if [ -f "$AZURE_CMAKE" ]; then
+                # Remove all instances of -Werror from the CMakeLists.txt
+                sed -i 's/-Werror//g' "$AZURE_CMAKE"
+                print_success "Removed -Werror flags from azure_c_shared"
+
+                # Re-run cmake to pick up the changes
+                print_info "Re-running CMake with patched files..."
+                if cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release; then
+                    print_success "CMake reconfiguration complete"
+                else
+                    print_warning "CMake reconfiguration had warnings (may be normal)"
+                fi
+            else
+                print_warning "Could not find azure_c_shared CMakeLists.txt to patch"
+                print_warning "Build may fail due to -Werror flags"
+            fi
         else
             print_error "CMake configuration failed"
             suggest_solution "sdk-build"
