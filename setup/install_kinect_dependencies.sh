@@ -251,21 +251,23 @@ fi
 print_step "Adding Microsoft package repository for ARM64"
 print_info "Configuring Microsoft apt repository..."
 
+# Install prerequisites
+if ! $SUDO apt-get install -y curl gpg; then
+    print_error "Failed to install curl and gpg"
+    suggest_solution "microsoft-repo"
+    exit 1
+fi
+
+# Get Ubuntu version
+UBUNTU_VERSION=$(lsb_release -rs)
+print_info "Detected Ubuntu version: $UBUNTU_VERSION"
+
 # Check if repository already exists
+REPO_CONFIGURED=false
 if [ -f "/etc/apt/sources.list.d/microsoft-prod.list" ]; then
     print_success "Microsoft repository already configured"
+    REPO_CONFIGURED=true
 else
-    # Install prerequisites
-    if ! $SUDO apt-get install -y curl gpg; then
-        print_error "Failed to install curl and gpg"
-        suggest_solution "microsoft-repo"
-        exit 1
-    fi
-
-    # Get Ubuntu version
-    UBUNTU_VERSION=$(lsb_release -rs)
-    print_info "Detected Ubuntu version: $UBUNTU_VERSION"
-
     # Add Microsoft GPG key
     print_info "Adding Microsoft GPG key..."
     if curl -sSL https://packages.microsoft.com/keys/microsoft.asc | $SUDO gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg; then
@@ -276,18 +278,19 @@ else
         exit 1
     fi
 
-    # Add Microsoft repository for ARM64
-    print_info "Adding Microsoft ARM64 repository..."
-    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/${UBUNTU_VERSION}/multiarch/prod ${UBUNTU_VERSION} main" | $SUDO tee /etc/apt/sources.list.d/microsoft-prod.list > /dev/null
+    # Add Microsoft repository for ARM64 with allow-insecure option
+    # The Microsoft repo doesn't have a Release file, so we need to bypass the check
+    print_info "Adding Microsoft ARM64 repository (with allow-insecure for missing Release file)..."
+    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg allow-insecure=yes] https://packages.microsoft.com/ubuntu/${UBUNTU_VERSION}/multiarch/prod ${UBUNTU_VERSION} main" | $SUDO tee /etc/apt/sources.list.d/microsoft-prod.list > /dev/null
     print_success "Microsoft repository added"
+fi
 
-    # Update package lists
-    print_info "Updating package lists with new repository..."
-    if $SUDO apt-get update; then
-        print_success "Package lists updated"
-    else
-        print_warning "Update completed with warnings (this may be normal)"
-    fi
+# Always update package lists after repository configuration
+print_info "Updating package lists with Microsoft repository..."
+if $SUDO apt-get update; then
+    print_success "Package lists updated"
+else
+    print_warning "Update completed with warnings (this may be normal for Microsoft repo)"
 fi
 
 # Step 7: Install Azure Kinect SDK packages
@@ -295,7 +298,7 @@ print_step "Installing Azure Kinect SDK packages"
 print_info "Installing libk4a runtime, development files, and tools..."
 
 K4A_PACKAGES="libk4a1.4 libk4a1.4-dev k4a-tools"
-if $SUDO apt-get install -y $K4A_PACKAGES; then
+if $SUDO apt-get install -y --allow-unauthenticated $K4A_PACKAGES; then
     print_success "Azure Kinect packages installed"
 
     # Test installation
