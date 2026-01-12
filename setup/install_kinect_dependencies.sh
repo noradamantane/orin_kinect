@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Progress tracking
-TOTAL_STEPS=7
+TOTAL_STEPS=10
 CURRENT_STEP=0
 
 # Error tracking
@@ -98,15 +98,38 @@ suggest_solution() {
             echo "  2. Build from source: https://github.com/andrewrk/libsoundio"
             ;;
         "depthengine")
-            echo "  1. Ensure you have write permissions: sudo chmod a+rwx /lib/aarch64-linux-gnu"
+            echo "  1. Ensure you have write permissions: sudo chmod 755 /lib/aarch64-linux-gnu"
             echo "  2. Verify architecture is arm64: uname -m"
-            echo "  3. Download manually from: https://www.nuget.org/packages/Microsoft.Azure.Kinect.Sensor/"
-            echo "  4. Extract libdepthengine.so.2.0 from linux/lib/native/arm64/release/"
+            echo "  3. Check if wget or curl is installed"
+            echo "  4. Try manual download from: https://www.nuget.org/packages/Microsoft.Azure.Kinect.Sensor/"
             ;;
         "udev")
             echo "  1. Check directory permissions: ls -la /etc/udev/rules.d/"
             echo "  2. Try: sudo chmod 755 /etc/udev/rules.d"
             echo "  3. Reload udev rules: sudo udevadm control --reload-rules && sudo udevadm trigger"
+            ;;
+        "microsoft-repo")
+            echo "  1. Check your internet connection"
+            echo "  2. Verify curl is installed: sudo apt-get install curl"
+            echo "  3. Try adding repository manually from: https://packages.microsoft.com"
+            echo "  4. Check if GPG key import succeeded"
+            ;;
+        "k4a-packages")
+            echo "  1. Verify Microsoft repository was added correctly: ls /etc/apt/sources.list.d/"
+            echo "  2. Try: sudo apt-get update"
+            echo "  3. Check available versions: apt-cache search libk4a"
+            echo "  4. Try installing specific version: sudo apt-get install libk4a1.4 libk4a1.4-dev k4a-tools"
+            ;;
+        "sdk-clone")
+            echo "  1. Check your internet connection"
+            echo "  2. Verify git is installed: sudo apt-get install git"
+            echo "  3. Check GitHub accessibility: ping github.com"
+            ;;
+        "sdk-build")
+            echo "  1. Check build logs in the build directory"
+            echo "  2. Ensure all dependencies are installed"
+            echo "  3. Try: cd build && ninja clean && cmake .. -GNinja && ninja"
+            echo "  4. Check for missing development packages"
             ;;
     esac
 }
@@ -224,44 +247,138 @@ else
     exit 1
 fi
 
-# Step 6: Install depth engine library (critical manual step)
-print_step "Configuring depth engine library"
-print_info "The depth engine library (libdepthengine.so.2.0) must be manually installed."
-print_info "Checking for existing installation..."
+# Step 6: Add Microsoft package repository
+print_step "Adding Microsoft package repository for ARM64"
+print_info "Configuring Microsoft apt repository..."
 
-DEPTHENGINE_PATH="/lib/aarch64-linux-gnu/libdepthengine.so.2.0"
-if [ -f "$DEPTHENGINE_PATH" ]; then
-    print_success "Depth engine library already installed at $DEPTHENGINE_PATH"
+# Check if repository already exists
+if [ -f "/etc/apt/sources.list.d/microsoft-prod.list" ]; then
+    print_success "Microsoft repository already configured"
 else
-    print_warning "Depth engine library NOT found at $DEPTHENGINE_PATH"
-    print_info "This library is REQUIRED for Azure Kinect SDK to function."
-    echo ""
-    echo -e "${YELLOW}Manual installation steps:${NC}"
-    echo "  1. Download Microsoft.Azure.Kinect.Sensor NuGet package (v1.4.0-alpha.4 or later)"
-    echo "     URL: https://www.nuget.org/packages/Microsoft.Azure.Kinect.Sensor/"
-    echo "  2. Extract the .nupkg file (it's a zip archive)"
-    echo "  3. Navigate to: linux/lib/native/arm64/release/"
-    echo "  4. Copy libdepthengine.so.2.0 to /lib/aarch64-linux-gnu/"
-    echo "     Command: sudo cp libdepthengine.so.2.0 /lib/aarch64-linux-gnu/"
-    echo "  5. Set permissions: sudo chmod 755 /lib/aarch64-linux-gnu/libdepthengine.so.2.0"
-    echo "  6. Update library cache: sudo ldconfig"
-    echo ""
-    FAILED_TESTS+=("depthengine")
+    # Install prerequisites
+    if ! $SUDO apt-get install -y curl gpg; then
+        print_error "Failed to install curl and gpg"
+        suggest_solution "microsoft-repo"
+        exit 1
+    fi
+
+    # Get Ubuntu version
+    UBUNTU_VERSION=$(lsb_release -rs)
+    print_info "Detected Ubuntu version: $UBUNTU_VERSION"
+
+    # Add Microsoft GPG key
+    print_info "Adding Microsoft GPG key..."
+    if curl -sSL https://packages.microsoft.com/keys/microsoft.asc | $SUDO gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg; then
+        print_success "Microsoft GPG key added"
+    else
+        print_error "Failed to add Microsoft GPG key"
+        suggest_solution "microsoft-repo"
+        exit 1
+    fi
+
+    # Add Microsoft repository for ARM64
+    print_info "Adding Microsoft ARM64 repository..."
+    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/${UBUNTU_VERSION}/multiarch/prod ${UBUNTU_VERSION} main" | $SUDO tee /etc/apt/sources.list.d/microsoft-prod.list > /dev/null
+    print_success "Microsoft repository added"
+
+    # Update package lists
+    print_info "Updating package lists with new repository..."
+    if $SUDO apt-get update; then
+        print_success "Package lists updated"
+    else
+        print_warning "Update completed with warnings (this may be normal)"
+    fi
 fi
 
-# Ensure the target directory has appropriate permissions
-if [ -d "/lib/aarch64-linux-gnu" ]; then
-    print_info "Ensuring /lib/aarch64-linux-gnu is accessible..."
-    $SUDO chmod 755 /lib/aarch64-linux-gnu 2>/dev/null || print_warning "Could not modify directory permissions"
+# Step 7: Install Azure Kinect SDK packages
+print_step "Installing Azure Kinect SDK packages"
+print_info "Installing libk4a runtime, development files, and tools..."
+
+K4A_PACKAGES="libk4a1.4 libk4a1.4-dev k4a-tools"
+if $SUDO apt-get install -y $K4A_PACKAGES; then
+    print_success "Azure Kinect packages installed"
+
+    # Test installation
+    print_info "Testing Azure Kinect package installation..."
+    if test_package "libk4a1.4"; then
+        print_success "  libk4a1.4 runtime package installed"
+    else
+        print_warning "  libk4a1.4 package not confirmed"
+        FAILED_TESTS+=("libk4a-runtime")
+    fi
+
+    if test_package "k4a-tools"; then
+        print_success "  k4a-tools package installed"
+    else
+        print_warning "  k4a-tools package not confirmed"
+        FAILED_TESTS+=("k4a-tools")
+    fi
+
+    if test_command "k4aviewer"; then
+        print_success "  k4aviewer command available"
+    else
+        print_warning "  k4aviewer command not found in PATH"
+        FAILED_TESTS+=("k4aviewer-command")
+    fi
+else
+    print_error "Failed to install Azure Kinect packages"
+    suggest_solution "k4a-packages"
+    exit 1
 fi
 
-# Step 7: Configure udev rules for device access
+# Step 8: Verify depth engine library
+print_step "Verifying depth engine library"
+print_info "The depth engine library should be included in the libk4a package..."
+
+DEPTHENGINE_PATH="/usr/lib/aarch64-linux-gnu/libdepthengine.so.2.0"
+ALT_DEPTHENGINE_PATH="/lib/aarch64-linux-gnu/libdepthengine.so.2.0"
+
+if [ -f "$DEPTHENGINE_PATH" ] || [ -f "$ALT_DEPTHENGINE_PATH" ]; then
+    print_success "Depth engine library found"
+    if [ -f "$DEPTHENGINE_PATH" ]; then
+        print_info "  Location: $DEPTHENGINE_PATH"
+    else
+        print_info "  Location: $ALT_DEPTHENGINE_PATH"
+    fi
+else
+    print_warning "Depth engine library not found at expected locations"
+    print_info "Checking if it's accessible via ldconfig..."
+    if test_library "libdepthengine.so"; then
+        print_success "  libdepthengine.so found in library path"
+    else
+        print_warning "  libdepthengine.so not found"
+        print_info "This may be included in a different location by the package manager."
+        FAILED_TESTS+=("depthengine-location")
+    fi
+fi
+
+# Update library cache
+print_info "Updating library cache..."
+$SUDO ldconfig
+print_success "Library cache updated"
+
+# Step 9: Clone Azure Kinect SDK source (for samples and additional tools)
+print_step "Cloning Azure Kinect SDK source repository"
+SDK_DIR="Azure-Kinect-Sensor-SDK"
+
+if [ -d "$SDK_DIR" ]; then
+    print_success "SDK repository already exists at $SDK_DIR"
+else
+    print_info "Cloning SDK repository from GitHub..."
+    if git clone --depth 1 https://github.com/microsoft/Azure-Kinect-Sensor-SDK.git; then
+        print_success "SDK repository cloned"
+    else
+        print_error "Failed to clone SDK repository"
+        suggest_solution "sdk-clone"
+        FAILED_TESTS+=("sdk-clone")
+    fi
+fi
+
+# Step 10: Configure udev rules for device access
 print_step "Configuring udev rules for Kinect device access"
-print_info "Checking for Azure Kinect SDK repository..."
 
-# Check if the SDK repository exists
-if [ -d "Azure-Kinect-Sensor-SDK" ]; then
-    UDEV_SOURCE="Azure-Kinect-Sensor-SDK/scripts/99-k4a.rules"
+if [ -d "$SDK_DIR" ]; then
+    UDEV_SOURCE="$SDK_DIR/scripts/99-k4a.rules"
     if [ -f "$UDEV_SOURCE" ]; then
         print_info "Found udev rules file in SDK repository"
         if $SUDO cp "$UDEV_SOURCE" /etc/udev/rules.d/; then
@@ -278,12 +395,9 @@ if [ -d "Azure-Kinect-Sensor-SDK" ]; then
         FAILED_TESTS+=("udev-missing")
     fi
 else
-    print_warning "Azure Kinect SDK repository not found in current directory"
-    print_info "You'll need to configure udev rules after cloning the SDK repository:"
-    echo "  1. Clone the SDK: git clone https://github.com/microsoft/Azure-Kinect-Sensor-SDK.git"
-    echo "  2. Copy rules: sudo cp Azure-Kinect-Sensor-SDK/scripts/99-k4a.rules /etc/udev/rules.d/"
-    echo "  3. Reload rules: sudo udevadm control --reload-rules && sudo udevadm trigger"
-    FAILED_TESTS+=("udev-sdk-not-cloned")
+    print_warning "SDK repository not available, skipping udev rules setup"
+    print_info "You can manually copy udev rules later from the SDK repository"
+    FAILED_TESTS+=("udev-sdk-not-available")
 fi
 
 # Summary
@@ -293,28 +407,40 @@ echo -e "${BLUE}================================${NC}"
 
 if [ ${#FAILED_TESTS[@]} -eq 0 ]; then
     print_success "All dependency checks passed!"
-    echo -e "\n${GREEN}Next steps:${NC}"
-    echo "  1. Clone Azure Kinect SDK: git clone https://github.com/microsoft/Azure-Kinect-Sensor-SDK.git"
-    echo "  2. Build the SDK:"
-    echo "     cd Azure-Kinect-Sensor-SDK"
-    echo "     mkdir build && cd build"
-    echo "     cmake .. -GNinja"
-    echo "     ninja"
-    echo "  3. Connect your Azure Kinect device"
-    echo "  4. Test with: ./bin/k4aviewer"
+    echo -e "\n${GREEN}Azure Kinect SDK is ready to use!${NC}"
+    echo ""
+    echo "To test your installation:"
+    echo "  1. Connect your Azure Kinect device via USB"
+    echo "  2. Run: k4aviewer"
+    echo ""
+    echo "To use the SDK in your own projects:"
+    echo "  - Runtime library: libk4a is installed and ready"
+    echo "  - Development headers: Available in /usr/include/k4a/"
+    echo "  - CMake integration: Use find_package(k4a) in your CMakeLists.txt"
+    echo ""
+    echo "SDK source code and examples are available in: $SDK_DIR"
 else
     print_warning "Installation completed with ${#FAILED_TESTS[@]} warning(s)/issue(s):"
     for test in "${FAILED_TESTS[@]}"; do
         echo "  - $test"
     done
 
-    echo -e "\n${YELLOW}Action required:${NC}"
+    echo -e "\n${YELLOW}Suggested actions:${NC}"
     if [[ " ${FAILED_TESTS[@]} " =~ "depthengine" ]]; then
         suggest_solution "depthengine"
     fi
     if [[ " ${FAILED_TESTS[@]} " =~ "udev" ]]; then
         suggest_solution "udev"
     fi
+    if [[ " ${FAILED_TESTS[@]} " =~ "k4a" ]]; then
+        suggest_solution "k4a-packages"
+    fi
+    if [[ " ${FAILED_TESTS[@]} " =~ "sdk" ]]; then
+        suggest_solution "sdk-clone"
+    fi
+
+    echo -e "\n${YELLOW}Despite these warnings, the SDK may still be functional.${NC}"
+    echo "Try running: k4aviewer (after connecting your device)"
 fi
 
 echo -e "\n${BLUE}Installation log completed at $(date)${NC}"
