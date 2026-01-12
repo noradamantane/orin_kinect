@@ -327,7 +327,8 @@ print_step "Building k4a-tools (k4aviewer) from source"
 print_info "Microsoft doesn't provide ARM64 binaries for k4a-tools, building from source..."
 
 # Install additional build dependencies for k4a-tools
-BUILD_DEPS="git cmake pkg-config libusb-1.0-0-dev"
+BUILD_DEPS="git cmake pkg-config libusb-1.0-0-dev nasm"
+print_info "Installing build dependencies (including NASM for optimized JPEG)..."
 if $SUDO apt-get install -y $BUILD_DEPS; then
     print_success "Build dependencies installed"
 else
@@ -354,62 +355,86 @@ fi
 # Build the SDK
 if [ -d "$SDK_DIR" ]; then
     print_info "Building Azure Kinect SDK and tools..."
-    cd "$SDK_DIR"
+
+    # Save current directory to ensure we return properly
+    ORIGINAL_DIR=$(pwd)
+
+    cd "$SDK_DIR" || {
+        print_error "Failed to enter SDK directory"
+        FAILED_TESTS+=("sdk-dir-access")
+    }
 
     # Create build directory
     if [ ! -d "build" ]; then
         mkdir build
     fi
 
-    cd build
+    cd build || {
+        print_error "Failed to enter build directory"
+        cd "$ORIGINAL_DIR"
+        FAILED_TESTS+=("build-dir-access")
+    }
 
     # Configure with CMake
+    # Add flags to disable problematic warnings on newer GCC (Ubuntu 22.04+)
     print_info "Configuring build with CMake..."
-    if cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release; then
-        print_success "CMake configuration complete"
-    else
-        print_error "CMake configuration failed"
-        suggest_solution "sdk-build"
-        cd ../..
-        FAILED_TESTS+=("cmake-configure")
-    fi
+    print_info "Applying workaround for GCC 11+ compatibility..."
 
-    # Build with Ninja
-    if [[ ! " ${FAILED_TESTS[@]} " =~ "cmake-configure" ]]; then
-        print_info "Building SDK (this may take several minutes)..."
-        if ninja; then
-            print_success "SDK build complete"
+    # Set compiler flags to disable warnings that are treated as errors
+    export CFLAGS="-Wno-error=array-parameter -Wno-error=maybe-uninitialized"
+    export CXXFLAGS="-Wno-error=array-parameter -Wno-error=maybe-uninitialized"
 
-            # Test if k4aviewer was built
-            if [ -f "bin/k4aviewer" ]; then
-                print_success "k4aviewer built successfully"
-                print_info "  Location: $PWD/bin/k4aviewer"
-
-                # Optionally install the tools
-                print_info "Installing k4aviewer to /usr/local/bin..."
-                if $SUDO cp bin/k4aviewer /usr/local/bin/; then
-                    print_success "k4aviewer installed to /usr/local/bin"
-                else
-                    print_warning "Failed to install k4aviewer, but it's available in build/bin/"
-                fi
-            else
-                print_warning "k4aviewer not found after build"
-                FAILED_TESTS+=("k4aviewer-build")
-            fi
-
-            # Clean up build artifacts to save space
-            print_info "Cleaning up build artifacts to save space..."
-            ninja clean
-            print_success "Build artifacts cleaned"
+    if [[ ! " ${FAILED_TESTS[@]} " =~ "build-dir-access" ]] && [[ ! " ${FAILED_TESTS[@]} " =~ "sdk-dir-access" ]]; then
+        if cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release; then
+            print_success "CMake configuration complete"
         else
-            print_error "SDK build failed"
+            print_error "CMake configuration failed"
             suggest_solution "sdk-build"
-            cd ../..
-            FAILED_TESTS+=("ninja-build")
+            cd "$ORIGINAL_DIR"
+            unset CFLAGS CXXFLAGS
+            FAILED_TESTS+=("cmake-configure")
+        fi
+
+        # Build with Ninja
+        if [[ ! " ${FAILED_TESTS[@]} " =~ "cmake-configure" ]]; then
+            print_info "Building SDK (this may take several minutes)..."
+            if ninja; then
+                print_success "SDK build complete"
+
+                # Test if k4aviewer was built
+                if [ -f "bin/k4aviewer" ]; then
+                    print_success "k4aviewer built successfully"
+                    print_info "  Location: $PWD/bin/k4aviewer"
+
+                    # Optionally install the tools
+                    print_info "Installing k4aviewer to /usr/local/bin..."
+                    if $SUDO cp bin/k4aviewer /usr/local/bin/; then
+                        print_success "k4aviewer installed to /usr/local/bin"
+                    else
+                        print_warning "Failed to install k4aviewer, but it's available in build/bin/"
+                    fi
+                else
+                    print_warning "k4aviewer not found after build"
+                    FAILED_TESTS+=("k4aviewer-build")
+                fi
+
+                # Clean up build artifacts to save space
+                print_info "Cleaning up build artifacts to save space..."
+                ninja clean
+                print_success "Build artifacts cleaned"
+            else
+                print_error "SDK build failed"
+                suggest_solution "sdk-build"
+                cd "$ORIGINAL_DIR"
+                unset CFLAGS CXXFLAGS
+                FAILED_TESTS+=("ninja-build")
+            fi
         fi
     fi
 
-    cd ../..
+    # Unset compiler flags and return to original directory
+    unset CFLAGS CXXFLAGS
+    cd "$ORIGINAL_DIR"
 else
     print_warning "SDK repository not available, skipping build"
     FAILED_TESTS+=("sdk-missing")
